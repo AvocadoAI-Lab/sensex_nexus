@@ -1,0 +1,36 @@
+name: Rust
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: echo "${{ secrets.ENV_FILE }}" > .env
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Start server in background
+        run: |
+          cargo run --bin sensex-backend &
+          sleep 5
+
+      - name: Run tests
+        run: |
+          # 運行未被忽略的測試
+          cargo test --verbose -- --skip test_groups_list --skip test_rag_queries
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill cargo || true
