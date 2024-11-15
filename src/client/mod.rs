@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
+use std::env;
 use std::time::{Duration, Instant};
 use dotenv::dotenv;
-use std::env;
 
 struct CacheEntry {
     data: Value,
