@@ -15,3 +15,4 @@ pub mod rootcheck;
 pub mod ciscat;
 pub mod wql;        // New
 pub mod common;
+pub mod report;     // New report module

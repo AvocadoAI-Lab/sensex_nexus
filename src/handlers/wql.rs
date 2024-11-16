@@ -1,4 +1,5 @@
 use crate::handlers::common::{handle_wazuh_request, WazuhRequest};
+use crate::handlers::report;
 use axum::{
     extract::Path,
     Json,
@@ -74,6 +75,32 @@ pub struct GroupResponse {
 pub struct AgentResult {
     pub agent_name: String,
     pub data: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QueryResponse {
+    pub raw_data: GroupResponse,
+    pub report: report::Report,
+}
+
+// Implementation of Clone for GroupResponse
+impl Clone for GroupResponse {
+    fn clone(&self) -> Self {
+        GroupResponse {
+            group: self.group.clone(),
+            results: self.results.clone(),
+        }
+    }
+}
+
+// Implementation of Clone for AgentResult
+impl Clone for AgentResult {
+    fn clone(&self) -> Self {
+        AgentResult {
+            agent_name: self.agent_name.clone(),
+            data: self.data.clone(),
+        }
+    }
 }
 
 fn sign_request(data: &str) -> String {
@@ -286,7 +313,7 @@ async fn get_agents_in_group(group: &str, token: &str) -> Result<Vec<Agent>, Str
 
 pub async fn handle_wql_query(
     Path(group): Path<String>,
-) -> Result<Json<GroupResponse>, String> {
+) -> Result<Json<QueryResponse>, String> {
     // First authenticate with Wazuh
     let token = authenticate().await?;
     
@@ -335,8 +362,26 @@ pub async fn handle_wql_query(
         });
     }
     
-    Ok(Json(GroupResponse {
-        group,
+    let group_response = GroupResponse {
+        group: group.clone(),
         results,
+    };
+
+    // Generate report with debug output
+    println!("Generating report for group: {}", group);
+    let report = match report::generate_report(group_response.clone()).await {
+        Ok(r) => {
+            println!("Report generated successfully");
+            r
+        },
+        Err(e) => {
+            println!("Error generating report: {}", e);
+            return Err(format!("Failed to generate report: {}", e));
+        }
+    };
+
+    Ok(Json(QueryResponse {
+        raw_data: group_response,
+        report,
     }))
 }

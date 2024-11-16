@@ -24,6 +24,9 @@ governor = "0.6.0"
 nonzero_ext = "0.3.0"
 tower-http = { version = "0.4.4", features = ["cors"] }
 lazy_static = "1.5.0"
+chrono = { version = "0.4.31", features = ["serde"] }
+headless_chrome = { version = "1.0.5", features = ["fetch"] }
+tempfile = "3.10.1"
 
 [dev-dependencies]
 hyper = { version = "0.14", features = ["full"] }
