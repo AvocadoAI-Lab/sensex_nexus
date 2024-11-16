@@ -1,6 +1,5 @@
 pub mod agents;
 pub mod auth;
-pub mod common;
 pub mod decoders;
 pub mod groups;
 pub mod lists;
@@ -10,7 +9,9 @@ pub mod rules;
 pub mod security;
 pub mod syscollector;
 pub mod tasks;
-pub mod syscheck;    // New
-pub mod sca;         // New
-pub mod rootcheck;   // New
-pub mod ciscat;      // New
+pub mod syscheck;
+pub mod sca;
+pub mod rootcheck;
+pub mod ciscat;
+pub mod wql;        // New
+pub mod common;

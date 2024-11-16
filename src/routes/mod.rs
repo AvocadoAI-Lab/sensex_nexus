@@ -12,10 +12,11 @@ mod rules;
 mod security;
 mod syscollector;
 mod tasks;
-mod syscheck;    // New
-mod sca;         // New
-mod rootcheck;   // New
-mod ciscat;      // New
+mod syscheck;
+mod sca;
+mod rootcheck;
+mod ciscat;
+mod wql;        // New
 
 pub fn create_router() -> Router {
     Router::new()
@@ -30,10 +31,11 @@ pub fn create_router() -> Router {
         .merge(security::routes())
         .merge(syscollector::routes())
         .merge(tasks::routes())
-        .merge(syscheck::routes())    // New
-        .merge(sca::routes())         // New
-        .merge(rootcheck::routes())   // New
-        .merge(ciscat::routes())      // New
+        .merge(syscheck::routes())
+        .merge(sca::routes())
+        .merge(rootcheck::routes())
+        .merge(ciscat::routes())
+        .merge(wql::routes())    // New
         .route("/health", get(health_check))
 }
 
