@@ -1,94 +1,87 @@
-use headless_chrome::{Browser, LaunchOptionsBuilder};
-use std::fs;
 use std::path::PathBuf;
-use tempfile::TempDir;
+use std::process::Command;
 use uuid::Uuid;
+use std::fs;
+use serde_json::json;
+use crate::handlers::wql::GroupResponse;
+use super::summary::Summary;
 
-pub async fn generate_pdf(html_content: &str) -> Result<String, String> {
+pub async fn generate_pdf(group_response: &GroupResponse, summary: &Summary) -> Result<String, String> {
     println!("Starting PDF generation process");
 
-    // Create a temporary directory to store the HTML file
-    let temp_dir = TempDir::new()
-        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-    println!("Created temporary directory: {:?}", temp_dir.path());
+    // Create a unique report ID
+    let report_id = Uuid::new_v4().to_string();
     
-    // Create a unique filename for the HTML file
-    let html_path = temp_dir.path().join(format!("{}.html", Uuid::new_v4()));
-    println!("HTML file path: {:?}", html_path);
-    
-    // Write HTML content to the temporary file
-    fs::write(&html_path, html_content)
-        .map_err(|e| format!("Failed to write HTML file: {}", e))?;
-    println!("Wrote HTML content to temporary file");
+    // Create reports directory if it doesn't exist
+    let reports_dir = PathBuf::from("reports");
+    fs::create_dir_all(&reports_dir)
+        .map_err(|e| format!("Failed to create reports directory: {}", e))?;
 
-    // Create PDF output directory if it doesn't exist
-    let pdf_dir = PathBuf::from("reports");
-    fs::create_dir_all(&pdf_dir)
-        .map_err(|e| format!("Failed to create PDF directory: {}", e))?;
-    println!("Ensured PDF directory exists: {:?}", pdf_dir);
+    // Create JSON data for Python script
+    let json_data = json!({
+        "group": group_response.group,
+        "total_alerts": summary.total_alerts,
+        "time_analysis": {
+            "alerts_by_hour": summary.time_analysis.alerts_by_hour,
+            "alerts_by_day": summary.time_analysis.alerts_by_day,
+            "first_alert": summary.time_analysis.first_alert.map(|dt| dt.to_rfc3339()),
+            "last_alert": summary.time_analysis.last_alert.map(|dt| dt.to_rfc3339())
+        },
+        "alerts_by_level": summary.alerts_by_level,
+        "alerts_by_category": summary.alerts_by_category,
+        "alerts_by_mitre": summary.alerts_by_mitre,
+        "agents_overview": summary.agents_overview.iter().map(|agent| {
+            json!({
+                "name": agent.name,
+                "total_alerts": agent.total_alerts,
+                "highest_level": agent.highest_level,
+                "alert_distribution": agent.alert_distribution,
+                "categories": agent.categories,
+                "last_alert": agent.last_alert.map(|dt| dt.to_rfc3339())
+            })
+        }).collect::<Vec<_>>()
+    });
 
-    // Generate unique filename for PDF
-    let pdf_filename = format!("report_{}.pdf", Uuid::new_v4());
-    let pdf_path = pdf_dir.join(&pdf_filename);
-    println!("PDF will be saved as: {:?}", pdf_path);
+    // Write JSON to temporary file
+    let json_path = reports_dir.join(format!("{}.json", report_id));
+    fs::write(&json_path, json_data.to_string())
+        .map_err(|e| format!("Failed to write JSON data: {}", e))?;
 
-    // Launch headless Chrome with detailed options
-    println!("Configuring Chrome launch options");
-    let options = LaunchOptionsBuilder::default()
-        .headless(true)
-        .window_size(Some((1920, 1080)))
-        .sandbox(false) // Disable sandbox for better compatibility
-        .build()
-        .map_err(|e| format!("Failed to build Chrome launch options: {}", e))?;
+    // Define output PDF path
+    let pdf_filename = format!("report_{}.pdf", report_id);
+    let pdf_path = reports_dir.join(&pdf_filename);
 
-    println!("Launching headless Chrome");
-    let browser = Browser::new(options)
-        .map_err(|e| format!("Failed to launch Chrome: {}\nMake sure Chrome is installed on the system", e))?;
-
-    println!("Creating new tab");
-    // Create a new tab
-    let tab = browser.new_tab()
-        .map_err(|e| format!("Failed to create new tab: {}", e))?;
-
-    // Navigate to the HTML file
-    let html_url = format!("file://{}", html_path.to_string_lossy());
-    println!("Navigating to HTML file: {}", html_url);
-    tab.navigate_to(&html_url)
-        .map_err(|e| format!("Failed to navigate to HTML file: {}", e))?;
-
-    // Wait for network idle to ensure everything is loaded
-    println!("Waiting for page to load");
-    tab.wait_until_navigated()
-        .map_err(|e| format!("Failed to wait for navigation: {}", e))?;
-
-    // Generate PDF with specific options
-    println!("Generating PDF");
-    let pdf_options = headless_chrome::types::PrintToPdfOptions {
-        landscape: Some(false),
-        display_header_footer: Some(false),
-        print_background: Some(true),
-        scale: Some(1.0),
-        paper_width: Some(8.27), // A4 width in inches
-        paper_height: Some(11.69), // A4 height in inches
-        margin_top: Some(0.4),
-        margin_bottom: Some(0.4),
-        margin_left: Some(0.4),
-        margin_right: Some(0.4),
-        page_ranges: Some("1-".to_string()),
-        ignore_invalid_page_ranges: Some(true),
-        prefer_css_page_size: Some(true),
-        ..Default::default()
+    // Run Python script using virtual environment
+    println!("Running Python script to generate PDF");
+    let python_executable = if cfg!(windows) {
+        ".venv\\Scripts\\python.exe"
+    } else {
+        ".venv/bin/python"
     };
 
-    let pdf_data = tab.print_to_pdf(Some(pdf_options))
-        .map_err(|e| format!("Failed to generate PDF: {}", e))?;
+    let output = Command::new(python_executable)
+        .arg("scripts/generate_report.py")
+        .arg(&json_path)
+        .arg(&pdf_path)
+        .output()
+        .map_err(|e| format!("Failed to execute Python script: {}", e))?;
 
-    // Save PDF to file
-    println!("Saving PDF to: {:?}", pdf_path);
-    fs::write(&pdf_path, pdf_data)
-        .map_err(|e| format!("Failed to write PDF file: {}", e))?;
+    // Check if the script executed successfully
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python script failed: {}", error));
+    }
 
-    println!("PDF generation completed successfully");
-    // Return the filename (not the full path) for security
+    // Clean up temporary JSON file
+    if let Err(e) = fs::remove_file(&json_path) {
+        println!("Warning: Failed to remove temporary JSON file: {}", e);
+    }
+
+    // Verify PDF was created
+    if !pdf_path.exists() {
+        return Err("PDF file was not generated".to_string());
+    }
+
+    println!("PDF generated successfully: {:?}", pdf_path);
     Ok(pdf_filename)
 }
