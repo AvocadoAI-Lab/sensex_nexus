@@ -65,13 +65,13 @@ pub struct Response {
     pub signature: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GroupResponse {
     pub group: String,
     pub results: Vec<AgentResult>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentResult {
     pub agent_name: String,
     pub data: Value,
@@ -81,26 +81,6 @@ pub struct AgentResult {
 pub struct QueryResponse {
     pub raw_data: GroupResponse,
     pub report: report::Report,
-}
-
-// Implementation of Clone for GroupResponse
-impl Clone for GroupResponse {
-    fn clone(&self) -> Self {
-        GroupResponse {
-            group: self.group.clone(),
-            results: self.results.clone(),
-        }
-    }
-}
-
-// Implementation of Clone for AgentResult
-impl Clone for AgentResult {
-    fn clone(&self) -> Self {
-        AgentResult {
-            agent_name: self.agent_name.clone(),
-            data: self.data.clone(),
-        }
-    }
 }
 
 fn sign_request(data: &str) -> String {
@@ -367,7 +347,7 @@ pub async fn handle_wql_query(
         results,
     };
 
-    // Generate report with debug output
+    // Generate report using the new TypeScript service
     println!("Generating report for group: {}", group);
     let report = match report::generate_report(group_response.clone()).await {
         Ok(r) => {
