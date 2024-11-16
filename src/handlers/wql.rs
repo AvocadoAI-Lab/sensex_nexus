@@ -1,24 +1,23 @@
+use crate::handlers::common::{handle_wazuh_request, WazuhRequest};
 use axum::{
-    Json,
     extract::Path,
+    Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use dotenv::dotenv;
+use native_tls::TlsConnector as NativeTlsConnector;
+use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::net::TcpStream;
-use tokio_native_tls::TlsConnector;
-use native_tls::TlsConnector as NativeTlsConnector;
-use std::time::{SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::fs;
 use std::collections::HashMap;
 use std::env;
-use dotenv::dotenv;
-use crate::handlers::common::{WazuhRequest, handle_wazuh_request};
-use crate::client::WazuhClient;
-use reqwest;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio_native_tls::TlsConnector;
+use uuid::Uuid;
 
 const SERVER_ADDR: &str = "172.104.127.21:8080";
 const CLIENT_ID: &str = "client1";
