@@ -2,6 +2,9 @@ pub mod features;
 pub mod shared;
 pub mod client;
 
+#[cfg(test)]
+pub mod tests;
+
 use axum::Router;
 use axum::routing::get;
 
