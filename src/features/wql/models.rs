@@ -52,6 +52,16 @@ pub struct AgentResult {
     pub data: Value,
 }
 
+// New simplified response structure
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SimplifiedQueryResponse {
+    pub group: String,
+    pub total_agents: i32,
+    pub total_alerts: i32,
+    pub report_file: String,
+}
+
+// Keep the full response for internal use
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryResponse {
     pub raw_data: GroupResponse,

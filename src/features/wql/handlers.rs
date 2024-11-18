@@ -134,7 +134,7 @@ fn prepare_query(template: &Value, agent_name: &str) -> Result<String, String> {
         if let Some(match_obj) = must.get_mut(0) {
             if let Some(name) = match_obj["match"]["agent.name"].as_str() {
                 if name == "{{agent_name}}" {
-                    match_obj["match"]["agent.name"] = serde_json::Value::String(agent_name.to_string());
+                    match_obj["match"]["agent.name"] = Value::String(agent_name.to_string());
                 }
             }
         }
@@ -173,9 +173,6 @@ async fn authenticate() -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to read auth response: {}", e))?;
 
-    println!("Auth response status: {}", status);
-    println!("Auth response body: {}", body);
-
     if status.is_success() {
         let auth_response: WazuhAuthResponse = serde_json::from_str(&body)
             .map_err(|e| format!("Failed to parse auth response: {}", e))?;
@@ -203,8 +200,6 @@ async fn get_agents_in_group(group: &str, token: &str) -> Result<Vec<Agent>, Str
     };
 
     let response = crate::shared::common::handle_wazuh_request(request, "groups/{group_id}/agents", |url| url).await;
-    
-    println!("Wazuh response: {}", serde_json::to_string_pretty(&response.0).unwrap());
 
     let agents = match &response.0 {
         value => {
@@ -235,16 +230,22 @@ async fn get_agents_in_group(group: &str, token: &str) -> Result<Vec<Agent>, Str
 pub async fn handle_wql_query(
     group: String,
 ) -> Result<Json<QueryResponse>, String> {
+    println!("Starting WQL query for group: {}", group);
+    
     // First authenticate with Wazuh
     let token = authenticate().await?;
+    println!("Authentication successful");
     
     // Load query template
     let template = load_query_template()?;
+    println!("Query template loaded");
     
     // Get all agents in the group using Wazuh API
     let agents = get_agents_in_group(&group, &token).await?;
+    println!("Found {} agents in group {}", agents.len(), group);
     
     let mut results = Vec::new();
+    let mut total_alerts = 0;
 
     // Initialize TLS connector
     let connector = NativeTlsConnector::builder()
@@ -255,7 +256,7 @@ pub async fn handle_wql_query(
 
     // Execute query for each agent
     for agent in agents {
-        println!("Querying agent: {}", agent.name);
+        println!("Processing agent: {}", agent.name);
         
         // Prepare query with agent name
         let wql_query = prepare_query(&template, &agent.name)?;
@@ -276,6 +277,12 @@ pub async fn handle_wql_query(
         // Parse response data
         let data: Value = serde_json::from_str(&response.data)
             .map_err(|e| format!("Failed to parse response data: {}", e))?;
+
+        // Count alerts from the response
+        if let Some(total) = data["hits"]["total"]["value"].as_i64() {
+            total_alerts += total;
+            println!("Found {} alerts for agent {}", total, agent.name);
+        }
 
         results.push(AgentResult {
             agent_name: agent.name,
@@ -301,8 +308,12 @@ pub async fn handle_wql_query(
         }
     };
 
-    Ok(Json(QueryResponse {
+    // Create a simplified response for the API
+    let response = QueryResponse {
         raw_data: group_response,
         report,
-    }))
+    };
+
+    println!("Query completed successfully for group: {}", group);
+    Ok(Json(response))
 }

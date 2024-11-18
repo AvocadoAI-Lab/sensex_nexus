@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use super::models::GroupResponse;
 use reqwest;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReportSummary {
@@ -13,7 +15,8 @@ pub struct ReportSummary {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Report {
     pub success: bool,
-    pub url: String,
+    pub filename: String,
+    pub pdf_data: String,
     pub summary: ReportSummary,
 }
 
@@ -46,8 +49,25 @@ pub async fn generate_report(group_response: GroupResponse) -> Result<Report, St
         return Err(format!("Report generation failed: {}", error_text));
     }
 
-    let report: Report = response.json().await
+    let mut report: Report = response.json().await
         .map_err(|e| format!("Failed to parse report response: {}", e))?;
 
+    // Create reports directory if it doesn't exist
+    let reports_dir = Path::new("reports");
+    fs::create_dir_all(reports_dir)
+        .map_err(|e| format!("Failed to create reports directory: {}", e))?;
+
+    // Decode base64 PDF data
+    let pdf_data = BASE64.decode(&report.pdf_data)
+        .map_err(|e| format!("Failed to decode PDF data: {}", e))?;
+
+    // Save PDF file
+    let pdf_path = reports_dir.join(&report.filename);
+    fs::write(&pdf_path, pdf_data)
+        .map_err(|e| format!("Failed to write PDF file: {}", e))?;
+
+    // Update the URL to point to the saved file
+    report.pdf_data = String::new(); // Clear the base64 data as it's no longer needed
+    
     Ok(report)
 }
