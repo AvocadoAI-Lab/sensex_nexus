@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 
-use sensex_backend::create_router;
+use sensex_nexus::create_router;
 
 #[tokio::main]
 async fn main() {

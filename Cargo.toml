@@ -1,5 +1,5 @@
 [package]
-name = "sensex_backend"
+name = "sensex_nexus"
 version = "0.1.0"
 edition = "2021"
 
