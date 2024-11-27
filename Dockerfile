@@ -1,33 +1,13 @@
-# Builder stage
-FROM rust:1.70-slim-bullseye as builder
+FROM rust:latest
 
-# Create a new empty shell project
-WORKDIR /usr/src/sensex_nexus
+WORKDIR /usr/src/app
 
-# Install required dependencies
-RUN apt-get update && \
-    apt-get install -y pkg-config libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY wql_queries ./wql_queries
 
-# Copy the source code
-COPY . .
-
-# Build the project
 RUN cargo build --release
 
-# Runtime stage
-FROM debian:bullseye-slim
+EXPOSE 29000
 
-# Install runtime dependencies
-RUN apt-get update && \
-    apt-get install -y ca-certificates libssl1.1 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy the binary from builder
-COPY --from=builder /usr/src/sensex_nexus/target/release/sensex_nexus /usr/local/bin/sensex_nexus
-
-# Expose port if needed (adjust based on your application)
-EXPOSE 8000
-
-# Set the startup command
-CMD ["sensex_nexus"]
+CMD ["./target/release/sensex_nexus"]
