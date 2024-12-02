@@ -91,7 +91,7 @@ async fn handle_wql_query_wrapper(
                 }
             } else {
                 // Return JSON response with PDF URL
-                let pdf_url = format!("http://localhost:3001/reports/{}", full_response.0.report.filename);
+                let pdf_url = format!("http://localhost:29000/reports/{}", full_response.0.report.filename);
                 
                 let response = json!({
                     "status": "success",

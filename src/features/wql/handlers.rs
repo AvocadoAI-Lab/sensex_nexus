@@ -169,7 +169,7 @@ async fn authenticate() -> Result<String, String> {
     };
 
     let client = reqwest::Client::new();
-    let response = client.post("http://localhost:3001/auth")
+    let response = client.post("http://localhost:29000/auth")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&auth_request)
         .send()
