@@ -52,6 +52,20 @@ pub struct AgentResult {
     pub data: Value,
 }
 
+// New enum for report types
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ReportType {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl Default for ReportType {
+    fn default() -> Self {
+        ReportType::Daily
+    }
+}
+
 // New simplified response structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimplifiedQueryResponse {

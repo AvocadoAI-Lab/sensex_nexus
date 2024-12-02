@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use super::handlers::handle_wql_query;
+use super::models::ReportType;
 use tokio::fs;
 
 type HeaderPair = [(header::HeaderName, &'static str); 2];
@@ -17,6 +18,8 @@ type ApiResponse = (StatusCode, HeaderPair, Vec<u8>);
 #[derive(Debug, Deserialize)]
 struct WqlQuery {
     format: Option<String>,
+    #[serde(default)]
+    report_type: Option<String>,
 }
 
 pub fn routes() -> Router {
@@ -48,12 +51,22 @@ async fn serve_pdf(AxumPath(filename): AxumPath<String>) -> ApiResponse {
     }
 }
 
+fn parse_report_type(report_type: Option<String>) -> ReportType {
+    match report_type.as_deref() {
+        Some("weekly") => ReportType::Weekly,
+        Some("monthly") => ReportType::Monthly,
+        Some("daily") | _ => ReportType::Daily, // Default to daily if not specified or unknown
+    }
+}
+
 async fn handle_wql_query_wrapper(
     AxumPath(group): AxumPath<String>,
     Query(params): Query<WqlQuery>,
 ) -> ApiResponse {
+    let report_type = parse_report_type(params.report_type);
+    
     // Call the original handler
-    match handle_wql_query(group).await {
+    match handle_wql_query(group, report_type).await {
         Ok(full_response) => {
             // Check if PDF format was requested
             if params.format.as_deref() == Some("pdf") {

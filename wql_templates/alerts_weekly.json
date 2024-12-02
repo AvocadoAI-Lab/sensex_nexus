@@ -19,7 +19,7 @@
         {
           "range": {
             "timestamp": {
-              "gte": "now/M",
+              "gte": "now/w",
               "lt": "now/d+1d"
             }
           }

@@ -22,7 +22,14 @@ const CLIENT_ID: &str = "client1";
 const CLIENT_KEY: &str = "test_key_1";
 const SERVER_KEY: &str = "server_key";
 const BUFFER_SIZE: usize = 8192;
-const QUERY_TEMPLATE_PATH: &str = "wql_queries/alerts.json";
+
+fn get_template_path(report_type: &ReportType) -> &'static str {
+    match report_type {
+        ReportType::Daily => "wql_templates/alerts_daily.json",
+        ReportType::Weekly => "wql_templates/alerts_weekly.json",
+        ReportType::Monthly => "wql_templates/alerts_monthly.json",
+    }
+}
 
 fn sign_request(data: &str) -> String {
     let mut hasher = Sha256::new();
@@ -118,8 +125,9 @@ async fn send_request(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_q
     Ok(response)
 }
 
-fn load_query_template() -> Result<Value, String> {
-    let template_str = fs::read_to_string(QUERY_TEMPLATE_PATH)
+fn load_query_template(report_type: &ReportType) -> Result<Value, String> {
+    let template_path = get_template_path(report_type);
+    let template_str = fs::read_to_string(template_path)
         .map_err(|e| format!("Failed to read query template: {}", e))?;
     
     serde_json::from_str(&template_str)
@@ -229,15 +237,16 @@ async fn get_agents_in_group(group: &str, token: &str) -> Result<Vec<Agent>, Str
 
 pub async fn handle_wql_query(
     group: String,
+    report_type: ReportType,
 ) -> Result<Json<QueryResponse>, String> {
-    println!("Starting WQL query for group: {}", group);
+    println!("Starting WQL query for group: {} with report type: {:?}", group, report_type);
     
     // First authenticate with Wazuh
     let token = authenticate().await?;
     println!("Authentication successful");
     
-    // Load query template
-    let template = load_query_template()?;
+    // Load query template based on report type
+    let template = load_query_template(&report_type)?;
     println!("Query template loaded");
     
     // Get all agents in the group using Wazuh API

@@ -15,14 +15,6 @@
               "gte": 10
             }
           }
-        },
-        {
-          "range": {
-            "timestamp": {
-              "gte": "now/M",
-              "lt": "now/d+1d"
-            }
-          }
         }
       ]
     }
