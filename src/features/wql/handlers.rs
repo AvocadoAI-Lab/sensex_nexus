@@ -8,11 +8,12 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_native_tls::TlsConnector;
 use uuid::Uuid;
+use tokio::time::timeout;
 
 use crate::shared::common::WazuhRequest;
 use super::{models::*, report};
@@ -21,7 +22,11 @@ const SERVER_ADDR: &str = "172.104.127.21:8080";
 const CLIENT_ID: &str = "client1";
 const CLIENT_KEY: &str = "test_key_1";
 const SERVER_KEY: &str = "server_key";
-const BUFFER_SIZE: usize = 8192;
+const INITIAL_BUFFER_SIZE: usize = 8192;
+const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 10; // 10MB
+const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes timeout
+const MAX_RETRIES: u32 = 3;
 
 fn get_template_path(report_type: &ReportType) -> &'static str {
     match report_type {
@@ -47,28 +52,54 @@ fn verify_response(response_data: &str, signature: &str) -> bool {
 }
 
 async fn stream_response(stream: &mut tokio_native_tls::TlsStream<TcpStream>) -> Result<String, String> {
-    let mut response_data = Vec::new();
-    let mut buffer = vec![0u8; BUFFER_SIZE];
+    let mut response_data = Vec::with_capacity(INITIAL_BUFFER_SIZE);
+    let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut total_bytes = 0;
 
     loop {
-        match stream.read(&mut buffer).await {
-            Ok(0) => {
-                if total_bytes == 0 {
-                    return Err("Connection closed by server".to_string());
+        match timeout(Duration::from_secs(60), stream.read(&mut buffer)).await {
+            Ok(read_result) => {
+                match read_result {
+                    Ok(0) => {
+                        if total_bytes == 0 {
+                            return Err("Connection closed by server".to_string());
+                        }
+                        break;
+                    },
+                    Ok(n) => {
+                        // Check if we're about to exceed max buffer size
+                        if total_bytes + n > MAX_BUFFER_SIZE {
+                            return Err("Response too large".to_string());
+                        }
+                        response_data.extend_from_slice(&buffer[..n]);
+                        total_bytes += n;
+                    }
+                    Err(e) => return Err(format!("Failed to read response: {}", e)),
                 }
-                break;
             },
-            Ok(n) => {
-                response_data.extend_from_slice(&buffer[..n]);
-                total_bytes += n;
-            }
-            Err(e) => return Err(format!("Failed to read response: {}", e)),
+            Err(_) => return Err("Read timeout".to_string()),
         }
     }
 
     String::from_utf8(response_data)
         .map_err(|e| format!("Invalid UTF-8 sequence: {}", e))
+}
+
+async fn send_request_with_retry(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_query: String) -> Result<Response, String> {
+    let mut retries = 0;
+    loop {
+        match send_request(stream, wql_query.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                if retries >= MAX_RETRIES {
+                    return Err(format!("Max retries exceeded: {}", e));
+                }
+                retries += 1;
+                println!("Request failed, retrying ({}/{}): {}", retries, MAX_RETRIES, e);
+                tokio::time::sleep(Duration::from_secs(2u64.pow(retries))).await;
+            }
+        }
+    }
 }
 
 async fn send_request(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_query: String) -> Result<Response, String> {
@@ -99,13 +130,15 @@ async fn send_request(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_q
     let request_json = serde_json::to_string(&request)
         .map_err(|e| e.to_string())?;
 
-    stream.write_all(request_json.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
-    
-    stream.flush()
-        .await
-        .map_err(|e| e.to_string())?;
+    // Send request with timeout
+    match timeout(REQUEST_TIMEOUT, async {
+        stream.write_all(request_json.as_bytes()).await?;
+        stream.flush().await?;
+        Ok::<(), std::io::Error>(())
+    }).await {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => return Err("Request timeout".to_string()),
+    }
 
     let response_str = stream_response(stream).await?;
     
@@ -256,10 +289,11 @@ pub async fn handle_wql_query(
     let mut results = Vec::new();
     let mut total_alerts = 0;
 
-    // Initialize TLS connector
-    let connector = NativeTlsConnector::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
+    // Initialize TLS connector with custom configuration
+    let mut connector = NativeTlsConnector::builder();
+    connector.danger_accept_invalid_certs(true);
+    // Set longer timeouts for TLS
+    let connector = connector.build()
         .map_err(|e| e.to_string())?;
     let connector = TlsConnector::from(connector);
 
@@ -270,18 +304,23 @@ pub async fn handle_wql_query(
         // Prepare query with agent name
         let wql_query = prepare_query(&template, &agent.name)?;
 
-        // Connect to server
-        let stream = TcpStream::connect(SERVER_ADDR)
-            .await
-            .map_err(|e| e.to_string())?;
+        // Connect to server with timeout
+        let stream = match timeout(Duration::from_secs(30), TcpStream::connect(SERVER_ADDR)).await {
+            Ok(result) => result.map_err(|e| e.to_string())?,
+            Err(_) => return Err("Connection timeout".to_string()),
+        };
+        
+        // Configure TCP stream
+        stream.set_nodelay(true)
+            .map_err(|e| format!("Failed to set TCP_NODELAY: {}", e))?;
         
         let mut stream = connector
             .connect("localhost", stream)
             .await
             .map_err(|e| e.to_string())?;
 
-        // Send request and get response
-        let response = send_request(&mut stream, wql_query).await?;
+        // Send request with retry mechanism
+        let response = send_request_with_retry(&mut stream, wql_query).await?;
         
         // Parse response data
         let data: Value = serde_json::from_str(&response.data)
