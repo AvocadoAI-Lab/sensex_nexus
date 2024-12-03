@@ -13,7 +13,7 @@ async fn main() {
                 .allow_headers(Any)
         );
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 29000));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 29000));
     println!("Server running on http://{}", addr);
 
     axum::Server::bind(&addr)

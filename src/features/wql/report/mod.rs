@@ -36,7 +36,7 @@ pub async fn generate_report(group_response: GroupResponse) -> Result<Report, St
     };
 
     // Send request to TypeScript service
-    let response = client.post("http://localhost:29005/api/generate-report")
+    let response = client.post("http://sensex_pulse:29005/api/generate-report")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&report_request)
         .send()
