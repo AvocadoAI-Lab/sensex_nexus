@@ -24,9 +24,10 @@ const CLIENT_KEY: &str = "test_key_1";
 const SERVER_KEY: &str = "server_key";
 const INITIAL_BUFFER_SIZE: usize = 8192;
 const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 10; // 10MB
-const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+const CHUNK_SIZE: usize = 1024 * 64; // Reduced to 64KB chunks for better stability
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes timeout
-const MAX_RETRIES: u32 = 3;
+const MAX_RETRIES: u32 = 5; // Increased retries
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 fn get_template_path(report_type: &ReportType) -> &'static str {
     match report_type {
@@ -55,6 +56,7 @@ async fn stream_response(stream: &mut tokio_native_tls::TlsStream<TcpStream>) ->
     let mut response_data = Vec::with_capacity(INITIAL_BUFFER_SIZE);
     let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut total_bytes = 0;
+    let mut last_read = SystemTime::now();
 
     loop {
         match timeout(Duration::from_secs(60), stream.read(&mut buffer)).await {
@@ -67,12 +69,18 @@ async fn stream_response(stream: &mut tokio_native_tls::TlsStream<TcpStream>) ->
                         break;
                     },
                     Ok(n) => {
-                        // Check if we're about to exceed max buffer size
                         if total_bytes + n > MAX_BUFFER_SIZE {
                             return Err("Response too large".to_string());
                         }
                         response_data.extend_from_slice(&buffer[..n]);
                         total_bytes += n;
+                        last_read = SystemTime::now();
+
+                        // Send keepalive if needed
+                        if SystemTime::now().duration_since(last_read).unwrap() >= KEEPALIVE_INTERVAL {
+                            stream.write_all(b"\n").await
+                                .map_err(|e| format!("Failed to send keepalive: {}", e))?;
+                        }
                     }
                     Err(e) => return Err(format!("Failed to read response: {}", e)),
                 }
@@ -85,20 +93,65 @@ async fn stream_response(stream: &mut tokio_native_tls::TlsStream<TcpStream>) ->
         .map_err(|e| format!("Invalid UTF-8 sequence: {}", e))
 }
 
-async fn send_request_with_retry(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_query: String) -> Result<Response, String> {
+async fn establish_connection() -> Result<tokio_native_tls::TlsStream<TcpStream>, String> {
+    // Connect to server with timeout
+    let stream = match timeout(Duration::from_secs(30), TcpStream::connect(SERVER_ADDR)).await {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => return Err("Connection timeout".to_string()),
+    };
+    
+    // Configure TCP stream
+    stream.set_nodelay(true)
+        .map_err(|e| format!("Failed to set TCP_NODELAY: {}", e))?;
+    
+    // Set keepalive
+    stream.set_keepalive(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("Failed to set keepalive: {}", e))?;
+
+    // Initialize TLS connector with custom configuration
+    let mut connector = NativeTlsConnector::builder();
+    connector.danger_accept_invalid_certs(true);
+    let connector = connector.build()
+        .map_err(|e| e.to_string())?;
+    let connector = TlsConnector::from(connector);
+
+    connector.connect("localhost", stream)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn send_request_with_retry(wql_query: String) -> Result<Response, String> {
     let mut retries = 0;
+    let mut last_error = String::new();
+
     loop {
-        match send_request(stream, wql_query.clone()).await {
-            Ok(response) => return Ok(response),
-            Err(e) => {
-                if retries >= MAX_RETRIES {
-                    return Err(format!("Max retries exceeded: {}", e));
+        // Establish new connection for each retry
+        match establish_connection().await {
+            Ok(mut stream) => {
+                match send_request(&mut stream, wql_query.clone()).await {
+                    Ok(response) => return Ok(response),
+                    Err(e) => {
+                        last_error = e.to_string();
+                        if retries >= MAX_RETRIES {
+                            return Err(format!("Max retries exceeded. Last error: {}", last_error));
+                        }
+                    }
                 }
-                retries += 1;
-                println!("Request failed, retrying ({}/{}): {}", retries, MAX_RETRIES, e);
-                tokio::time::sleep(Duration::from_secs(2u64.pow(retries))).await;
+            },
+            Err(e) => {
+                last_error = e.to_string();
+                if retries >= MAX_RETRIES {
+                    return Err(format!("Max retries exceeded. Last error: {}", last_error));
+                }
             }
         }
+
+        retries += 1;
+        println!("Request failed, retrying ({}/{}): {}", retries, MAX_RETRIES, last_error);
+        
+        // Exponential backoff with jitter
+        let backoff = 2u64.pow(retries) + (rand::random::<u64>() % 1000);
+        tokio::time::sleep(Duration::from_millis(backoff)).await;
     }
 }
 
@@ -130,10 +183,19 @@ async fn send_request(stream: &mut tokio_native_tls::TlsStream<TcpStream>, wql_q
     let request_json = serde_json::to_string(&request)
         .map_err(|e| e.to_string())?;
 
+    // Split request into chunks if it's large
+    let chunks: Vec<&[u8]> = request_json.as_bytes()
+        .chunks(CHUNK_SIZE)
+        .collect();
+
     // Send request with timeout
     match timeout(REQUEST_TIMEOUT, async {
-        stream.write_all(request_json.as_bytes()).await?;
-        stream.flush().await?;
+        for chunk in chunks {
+            stream.write_all(chunk).await?;
+            stream.flush().await?;
+            // Small delay between chunks
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         Ok::<(), std::io::Error>(())
     }).await {
         Ok(result) => result.map_err(|e| e.to_string())?,
@@ -289,14 +351,6 @@ pub async fn handle_wql_query(
     let mut results = Vec::new();
     let mut total_alerts = 0;
 
-    // Initialize TLS connector with custom configuration
-    let mut connector = NativeTlsConnector::builder();
-    connector.danger_accept_invalid_certs(true);
-    // Set longer timeouts for TLS
-    let connector = connector.build()
-        .map_err(|e| e.to_string())?;
-    let connector = TlsConnector::from(connector);
-
     // Execute query for each agent
     for agent in agents {
         println!("Processing agent: {}", agent.name);
@@ -304,23 +358,8 @@ pub async fn handle_wql_query(
         // Prepare query with agent name
         let wql_query = prepare_query(&template, &agent.name)?;
 
-        // Connect to server with timeout
-        let stream = match timeout(Duration::from_secs(30), TcpStream::connect(SERVER_ADDR)).await {
-            Ok(result) => result.map_err(|e| e.to_string())?,
-            Err(_) => return Err("Connection timeout".to_string()),
-        };
-        
-        // Configure TCP stream
-        stream.set_nodelay(true)
-            .map_err(|e| format!("Failed to set TCP_NODELAY: {}", e))?;
-        
-        let mut stream = connector
-            .connect("localhost", stream)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Send request with retry mechanism
-        let response = send_request_with_retry(&mut stream, wql_query).await?;
+        // Send request with retry mechanism and new connection for each agent
+        let response = send_request_with_retry(wql_query).await?;
         
         // Parse response data
         let data: Value = serde_json::from_str(&response.data)
@@ -336,6 +375,9 @@ pub async fn handle_wql_query(
             agent_name: agent.name,
             data,
         });
+
+        // Add small delay between agents to prevent overwhelming the server
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     
     let group_response = GroupResponse {
