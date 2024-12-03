@@ -10,10 +10,11 @@ use std::env;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, TcpSocket};
 use tokio_native_tls::TlsConnector;
 use uuid::Uuid;
 use tokio::time::timeout;
+use std::net::SocketAddr;
 
 use crate::shared::common::WazuhRequest;
 use super::{models::*, report};
@@ -94,19 +95,22 @@ async fn stream_response(stream: &mut tokio_native_tls::TlsStream<TcpStream>) ->
 }
 
 async fn establish_connection() -> Result<tokio_native_tls::TlsStream<TcpStream>, String> {
-    // Connect to server with timeout
-    let stream = match timeout(Duration::from_secs(30), TcpStream::connect(SERVER_ADDR)).await {
-        Ok(result) => result.map_err(|e| e.to_string())?,
+    let addr: SocketAddr = SERVER_ADDR.parse()
+        .map_err(|e| format!("Failed to parse server address: {}", e))?;
+
+    // Create a TCP socket
+    let socket = TcpSocket::new_v4()
+        .map_err(|e| format!("Failed to create socket: {}", e))?;
+
+    // Set TCP_NODELAY
+    socket.set_nodelay(true)
+        .map_err(|e| format!("Failed to set TCP_NODELAY: {}", e))?;
+
+    // Connect with timeout
+    let stream = match timeout(Duration::from_secs(30), socket.connect(addr)).await {
+        Ok(result) => result.map_err(|e| format!("Failed to connect: {}", e))?,
         Err(_) => return Err("Connection timeout".to_string()),
     };
-    
-    // Configure TCP stream
-    stream.set_nodelay(true)
-        .map_err(|e| format!("Failed to set TCP_NODELAY: {}", e))?;
-    
-    // Set keepalive
-    stream.set_keepalive(Some(Duration::from_secs(30)))
-        .map_err(|e| format!("Failed to set keepalive: {}", e))?;
 
     // Initialize TLS connector with custom configuration
     let mut connector = NativeTlsConnector::builder();
